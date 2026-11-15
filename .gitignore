@@ -1,0 +1,8 @@
+.venv/
+.env
+chroma_store/
+logs/
+__pycache__/
+*.pyc
+.claude/
+prd_exercise/

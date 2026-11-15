@@ -1,0 +1,11 @@
+langchain-core>=0.3
+langchain-text-splitters>=0.3
+langchain-groq>=0.3
+langchain-chroma>=0.2
+chromadb>=0.5
+pypdf>=4.0
+streamlit>=1.40
+python-dotenv>=1.0
+truststore>=0.9
+onnxruntime>=1.17
+tokenizers>=0.15
