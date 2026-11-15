@@ -6,6 +6,8 @@ It uses **Retrieval-Augmented Generation (RAG)**: for each question it first sea
 
 Built from a product requirements document: [PRD.md](PRD.md) (problem brief: [PROBLEM_STATEMENT.txt](PROBLEM_STATEMENT.txt)).
 
+![The chatbot answering "Why is my mobile internet so slow?" with step-by-step guidance, sample questions in the sidebar](docs/screenshot.png)
+
 ## Features
 
 - 💬 **Chat web app** (Streamlit) with streamed answers, clickable sample questions and a "Clear conversation" button
