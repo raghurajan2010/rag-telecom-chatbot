@@ -1,7 +1,7 @@
 # Product Requirements Document — Agentic Refund Capability
 
 **Date:** 2026-09-03
-**Author:** Dhaval Patel
+**Author:** Raghu Rajan
 
 ---
 
