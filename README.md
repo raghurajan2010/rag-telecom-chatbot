@@ -105,6 +105,8 @@ Refund agent, all seven scenarios from [agent_PRD.md](agent_PRD.md), checked by 
 | 6. Above limit | "I want a refund of ₹999." | Submitted to the Support Team; no confirmation, no refund |
 | 7. Follow-up | "How do I activate international roaming?" → "Should I do that before I travel?" | "that" understood as activating roaming |
 
+![The refund agent handling "I want a refund of ₹499": it replies "Refund eligible: ₹499, do you want to proceed?", the customer answers "Yes, proceed", and the refund is processed with reference ref_02eb60](docs/refund-499-screenshot.png)
+
 ![The refund agent handling "I want a refund of ₹999": the request is above the ₹499 limit, so it is submitted to the Support Team with reference sup_294674, with an Agent steps toggle below](docs/refund-screenshot.png)
 
 Example workflow log for scenario 1 (shown under each answer as "Agent steps"):
