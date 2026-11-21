@@ -5,8 +5,9 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from config import LLM_MODEL, LOG_DIR
 from retriever import build_retriever, format_context
@@ -27,21 +28,29 @@ account data, explain that you can't see account details and point them to the M
 - Be concise and friendly. Use numbered steps for troubleshooting instructions.
 - Past resolved tickets (TICKETS) describe what fixed similar issues for other customers; present \
 them as things that have helped, not as guaranteed outcomes.
+- Earlier messages in the conversation are given only so you can understand follow-up questions \
+(for example what "that" refers to). Facts must still come from the CONTEXT.
 
 CONTEXT:
 {context}"""
 
 PROMPT = ChatPromptTemplate.from_messages(
-    [("system", SYSTEM_PROMPT), ("human", "{question}")]
+    [("system", SYSTEM_PROMPT), MessagesPlaceholder("history"), ("human", "{question}")]
 ).partial(fallback=FALLBACK)
 
 
-def build_llm():
+def build_llm(streaming: bool = True):
     if not os.getenv("GROQ_API_KEY"):
         raise RuntimeError("GROQ_API_KEY is not set. Copy .env.example to .env and add your key.")
     from langchain_groq import ChatGroq
 
-    return ChatGroq(model=LLM_MODEL, temperature=0, reasoning_effort="none", streaming=True)
+    return ChatGroq(model=LLM_MODEL, temperature=0, reasoning_effort="none", streaming=streaming)
+
+
+def to_messages(history):
+    """[{'role','content'}] -> LangChain chat messages."""
+    return [HumanMessage(m["content"]) if m["role"] == "user" else AIMessage(m["content"])
+            for m in history or []]
 
 
 class TelecomRAG:
@@ -50,11 +59,13 @@ class TelecomRAG:
         self.generate = PROMPT | build_llm() | StrOutputParser()
 
     def retrieve(self, question: str):
+        # The retrieval query is always the raw question; history never changes it (agent PRD FR-49).
         return self.retriever.invoke(question)
 
-    def stream_answer(self, question: str, docs):
+    def stream_answer(self, question: str, docs, history=None):
         """Yield answer tokens grounded in the given retrieved docs."""
-        yield from self.generate.stream({"question": question, "context": format_context(docs)})
+        yield from self.generate.stream({"question": question, "context": format_context(docs),
+                                         "history": to_messages(history)})
 
 
 def source_list(docs):
@@ -78,9 +89,11 @@ def log_event(event: dict) -> str:
     return event["id"]
 
 
-def log_interaction(question, answer, docs, latency_s, first_token_s, channel):
+def log_interaction(question, answer, docs, latency_s, first_token_s, channel,
+                    intent=None, trace=None):
     return log_event({
         "type": "interaction", "channel": channel, "question": question, "answer": answer,
+        "intent": intent, "trace": list(trace or []),
         # True only when the bot couldn't answer from context (PRD deflection metric).
         "escalated": "don't have enough information" in answer,
         "mentions_611": "611" in answer,"sources": [d.metadata.get("ref") for d in docs],

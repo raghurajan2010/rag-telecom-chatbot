@@ -4,7 +4,9 @@ A customer-support chatbot for a fictional mobile operator, NovaCell. It answers
 
 It uses **Retrieval-Augmented Generation (RAG)**: for each question it first searches the three sources for relevant passages, then asks an LLM to answer *only* from those passages and to show its sources. If the answer isn't in the knowledge base, it says so and points the customer to a human (call 611) instead of making something up.
 
-Built from a product requirements document: [PRD.md](PRD.md) (problem brief: [PROBLEM_STATEMENT.txt](PROBLEM_STATEMENT.txt)).
+It also has an **agentic refund capability**: it recognises when a customer wants a recharge refunded, looks up their (simulated) account with tools, checks eligibility with fixed business rules, asks for explicit confirmation, and then performs a simulated refund, or hands larger refunds to the Support Team.
+
+Built from two product requirements documents: [PRD.md](PRD.md) (the RAG chatbot; problem brief: [PROBLEM_STATEMENT.txt](PROBLEM_STATEMENT.txt)) and [agent_PRD.md](agent_PRD.md) (the refund agent).
 
 ![The chatbot answering "Why is my mobile internet so slow?" with step-by-step guidance, sample questions in the sidebar](docs/screenshot.png)
 
@@ -18,8 +20,22 @@ Built from a product requirements document: [PRD.md](PRD.md) (problem brief: [PR
 - 👍👎 **Feedback buttons** plus an interaction log (question, answer, sources, response time, whether it had to escalate)
 - ⌨️ **CLI mode** for use in a terminal
 - 🔁 **Easy to update knowledge**: support staff edit the CSV, database or PDF and re-run one ingest script
+- 🧭 **Intent routing**: each message is classified as a support question (`requirement_inquiry`) or a refund request (`refund_request`)
+- 🤖 **Tool-using Refund Agent** with confirm/cancel buttons, a step-by-step "Agent steps" log, and a demo-account panel
+- 💬 **Conversation memory**: the last 4 exchanges are passed to both routes, so follow-ups like "Should I do that before I travel?" work
 
 ## How it works
+
+```
+User message
+     │
+     ▼
+Intent detection (LLM, structured output)
+     ├── requirement_inquiry ──→ RAG pipeline (below)
+     └── refund_request ───────→ Refund Agent (see "Refund agent")
+```
+
+### RAG pipeline
 
 ```
 User question
@@ -37,6 +53,35 @@ Prompt: "answer ONLY from this context, else say you don't know"
 Qwen 27B on Groq (temperature 0) → answer streamed to the UI, with sources
 ```
 
+The search query is always the customer's raw question; conversation history is only added to the prompt, so it never changes what is retrieved.
+
+### Refund agent
+
+```
+Refund request
+     │
+     ▼
+LLM agent calls tools: get_user_account → validate_refund(amount)
+     │       (it can't call process_refund or submit_to_support)
+     ▼
+Code checks the result (no LLM decides eligibility)
+     ├── not eligible ──────→ explain why (too old, already refunded, exceeds recharge…)
+     ├── eligible, ≤ ₹499 ──→ ask "Confirm refund / Cancel"
+     │                           └── confirmed → process_refund() → simulated refund reference
+     └── eligible, > ₹499 ──→ submit_to_support() → "submitted to our Support Team"
+```
+
+Guardrails, all enforced in code:
+
+- **Rules are code, not the LLM.** Eligibility checks are fixed: the recharge must be completed, within 7 days and not already refunded, and the amount must be above zero and no more than the recharge.
+- **Explicit confirmation.** A refund runs only after an explicit "Yes, proceed" (or the Confirm button) in a later message. Ambiguous replies like "maybe" get the question again.
+- **Approval limit.** Refunds above ₹499 are never processed by the app. They go to the Support Team, and the bot never claims an outcome.
+- **No invented amounts.** The agent uses only an amount the customer stated or picked. If none was given, it offers the single eligible recharge, or asks which one when there are several.
+- **Sensitive tools hidden.** `process_refund` and `submit_to_support` are never offered to the LLM, and both re-validate before acting.
+- **Session account only.** The user ID comes from the (simulated) session and is never asked for. The customer's claims can't override the account data.
+
+The refund is simulated. There's no real billing or payment system, and the demo account (`account_data.py`) has a ₹999 and a ₹499 recharge.
+
 ## Example results
 
 Live test run against the real model:
@@ -47,6 +92,31 @@ Live test run against the real model:
 | "I was charged for roaming after coming back from Spain" | Explained using a similar resolved ticket (TK-004); noted it can't see the customer's bill | 0.26 s |
 | "What is my current account balance?" | Said it has no account access; pointed to the app / `*123#` | 0.25 s |
 | "Who won the 2022 football World Cup?" | Declined: "I don't have enough information… call 611" | 0.25 s |
+
+Refund agent, all seven scenarios from [agent_PRD.md](agent_PRD.md), checked by `demo_scenarios.py` against the live model:
+
+| Scenario | Message | Outcome |
+|---|---|---|
+| 1. Successful refund | "I want a refund of ₹499." → "Yes, proceed" | Asks for confirmation, then refunds with a reference like `ref_3dd4d6` |
+| 2. Exceeds recharge | "Give me a refund of ₹2,000." | Rejected: exceeds the ₹499 recharge |
+| 3. Too old | "I want a refund of ₹499." (recharge 15 days old) | Rejected: outside the 7-day window |
+| 4. Already refunded | "I want a refund of ₹499." (already refunded) | Rejected: already refunded |
+| 5. Normal question | "Why is my mobile internet slow?" | Routed to RAG, answered with sources |
+| 6. Above limit | "I want a refund of ₹999." | Submitted to the Support Team; no confirmation, no refund |
+| 7. Follow-up | "How do I activate international roaming?" → "Should I do that before I travel?" | "that" understood as activating roaming |
+
+Example workflow log for scenario 1 (shown under each answer as "Agent steps"):
+
+```
+[Intent] refund_request
+[Agent] get_user_account
+[Agent] validate_refund(amount=499)
+[Validation] eligible=True
+[Agent] awaiting_user_confirmation
+[User] confirmed
+[Agent] process_refund(amount=499)
+[Refund] success refund_id=ref_3dd4d6
+```
 
 ## Tech stack
 
@@ -73,7 +143,16 @@ copy .env.example .env          # then paste your GROQ_API_KEY into .env
 .venv\Scripts\streamlit.exe run app.py
 ```
 
-Then open http://localhost:8501. For the terminal version, run `.venv\Scripts\python.exe main.py` (type `quit` to exit).
+Then open http://localhost:8501. For the terminal version, run `.venv\Scripts\python.exe main.py` (type `clear` to reset, `quit` to exit).
+
+To try the refund agent, use the "Try a refund" buttons in the sidebar. The **Demo account** panel shows the simulated recharges, and its **Scenario data** menu switches to the "15 days old" and "already refunded" data from the PRD scenarios.
+
+### Tests
+
+```powershell
+.venv\Scripts\python.exe -m unittest discover tests   # refund rules and guardrails, offline (no API key)
+.venv\Scripts\python.exe demo_scenarios.py            # all 7 PRD scenarios against the live model
+```
 
 On macOS/Linux, use `.venv/bin/` instead of `.venv\Scripts\` and `cp` instead of `copy`.
 
@@ -96,9 +175,15 @@ Each script rebuilds only its own collection, so it's safe to re-run. Restart th
 | `config.py` | Paths, model names, embedding and ChromaDB helpers |
 | `ingest_faq.py`, `ingest_tickets.py`, `ingest_guides.py`, `ingest_all.py` | Load each source into `chroma_store/` |
 | `retriever.py` | Parallel search across the three collections, with source labels |
-| `rag_chain.py` | Prompt, LLM, streaming, and the interaction/feedback log |
+| `rag_chain.py` | Prompt (with conversation history), LLM, streaming, and the interaction/feedback log |
+| `intent.py` | Classifies each message as `requirement_inquiry` or `refund_request` |
+| `assistant.py` | Routes each message to RAG or the Refund Agent; keeps per-session history |
+| `refund_agent.py` | Tool-calling Refund Agent, confirmation handling and refund state machine |
+| `refund_tools.py` | `get_user_account`, `validate_refund`, `process_refund`, `submit_to_support` (deterministic rules) |
+| `account_data.py` | Hard-coded demo account and scenario presets |
 | `app.py` | Streamlit web UI |
 | `main.py` | Command-line chat |
+| `demo_scenarios.py`, `tests/` | Live scenario checks and offline unit tests |
 | `data/` | Sample knowledge sources (FAQ, tickets, guide) |
 
 ## What I learned / design decisions
@@ -108,10 +193,13 @@ Each script rebuilds only its own collection, so it's safe to re-run. Restart th
 - **Measure escalation precisely.** An answer counts as escalated only when the bot falls back. Helpful answers that also say "call 611 if it persists" don't count against the deflection metric.
 - **Fast startup.** Loading MiniLM through PyTorch took minutes on a laptop with antivirus scanning. Switching to the same model on ONNX Runtime brought startup down to a few seconds.
 - **Model availability.** The PRD named `qwen3.6-27b`, which Groq no longer serves, so the model is configurable through `LLM_MODEL` in `.env`.
+- **Let the LLM understand, let code decide.** In the refund agent, the LLM works out what the customer wants and calls lookup tools. Anything with money attached (eligibility, the ₹499 limit, executing a refund) is plain Python that the LLM can't call or override.
+- **Confirmation as state, not as a prompt.** A small state machine (`awaiting_confirmation`, `refund_processed`, …) makes it impossible to refund before validation and an explicit "yes", whatever the model says.
+- **Plain Python over a framework.** The PRD allowed LangGraph, but a few explicit states were enough, so no new dependency was added.
 
 ## Possible next steps
 
-Remember earlier questions in the conversation, hybrid search (BM25 + vectors), re-ranking, an automated evaluation set (e.g. RAGAS), and handing unresolved chats to a human agent.
+Hybrid search (BM25 + vectors), re-ranking, an automated evaluation set (e.g. RAGAS), handing unresolved chats to a human agent, and connecting the refund agent to a real (sandboxed) billing API with real sign-in.
 
 ## Notes
 
